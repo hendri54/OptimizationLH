@@ -1,12 +1,11 @@
 ## -------------  Model
 
 # Make random model parameters for testing and intialization
-# All in [-1, 1]
+# All in [1, 2]
 # Changes GLOBAL_RNG
 function make_random_parameters(mdl :: Model, randSeed :: Integer)
     Random.seed!(randSeed);
-    return ModelParams(rand(mdl.K) .- 0.5, rand(mdl.K) .- 0.5, 
-        rand(mdl.K) .- 0.5, rand(mdl.K) .- 0.5);
+    return ModelParams(rand(n_params(mdl)) .+ 1.0)
 end
 
 
@@ -22,69 +21,88 @@ end
 
 # Guess to model params and reverse
 function guess_to_mp(mdl :: Model, guessV :: Vector{Float64})
-    @assert length(guessV) == mdl.K * 4
-    return ModelParams(guessV[1 : mdl.K],  guessV[(mdl.K + 1) : (2 * mdl.K)],
-        guessV[(2 * mdl.K + 1) : (3 * mdl.K)],  guessV[(3 * mdl.K + 1) : (4 * mdl.K)])
+    @assert length(guessV) == n_params(mdl)
+    return ModelParams(guessV)
 end
 
 
 function mp_to_guess(mdl :: Model, mp :: ModelParams)
-    return vcat(mp.alphaV, mp.betaV, mp.gammaV, mp.deltaV)
+    return mp.alphaV
 end
 
 
 ## -----------  Solve
 
 function solve(mdl :: Model, mp :: ModelParams)
-    endow_kjM = make_endowments(mdl,  mdl.N,  mp.alphaV, mp.betaV);
-    optValue_kmM = make_endowments(mdl, mdl.M,  mp.gammaV, mp.deltaV);
+    # endow_jV = make_endowments(mdl,  mp);
+    # optValue_mV = make_option_values(mdl, mp);
 
-    prob_mjM = zeros(mdl.M, mdl.N);
-    for j = 1 : mdl.N
-        prob_mjM[:, j] = decision_prob(mdl, endow_kjM[:, j],  optValue_kmM);
-    end
-
+    prob_mjM = decision_probabilities(mdl, mp);
     choice_sjM = simulate_choices(mdl, prob_mjM, 320);
-
-    mStats = compute_stats(mdl, choice_sjM, endow_kjM);
+    mStats = compute_stats(mdl, choice_sjM);
 
     return mStats
 end
 
 
-## Make endowments of households or options
-#=
-IN
-    nInd
-        Number of individuals for which endowments are drawn
-=#
-function make_endowments(mdl :: Model,  nInd :: Integer,
-    alphaV :: Vector{Float64}, betaV :: Vector{Float64})
+## Make endowments of households
+function make_endowments(mdl :: Model)
 
-    endow_kjM = zeros(mdl.K, nInd);
-    endowV = (collect(1 : nInd) ./ nInd) .^ 0.7;
-    for k = 1 : mdl.K
-        endow_kjM[k,:] = alphaV[k] .* (endowV .+ betaV[k] .* 10.0 .* endowV);
-    end
+    # Random.seed!(583);
+    # outV = rand(mdl.N, mdl.K + 1) * vcat(1.0, mp.alphaV);
+    outV = collect(1 : mdl.N) ./ mdl.N;
+    return outV :: Vector{Float64}
+    # endow_kjM = zeros(mdl.K, nInd);
+    # endowV = collect(1 : nInd) ./ nInd .* 2;
+    # for k = 1 : mdl.K
+    #     endow_kjM[k,:] = (endowV .^ 0.6) .* (alphaV[k] .+ betaV[k] .* endowV);
+    # end
+    # return endow_kjM
+end
 
-    @assert all(abs.(endow_kjM) .> 0.0)
-    return endow_kjM
+
+## Option value = fixed matrix * alphaV
+function make_option_values(mdl :: Model, mp :: ModelParams)
+    Random.seed!(439);
+    outV = rand(mdl.M, mdl.K + 1) * vcat(1.0, mp.alphaV);
+    return outV :: Vector{Float64}
+end
+
+
+## Decision probabilities
+function decision_probabilities(mdl :: Model, mp :: ModelParams)
+    v_mV = make_option_values(mdl, mp);
+    value_jV = make_endowments(mdl);
+    # The trick is to find a bounded function with many parameters
+    util_mjM = exp.(sin.(5.0 .* v_mV * transpose(value_jV)));
+    prob_mjM = util_mjM ./ sum(util_mjM, dims = 1);
+    # prob_mjM = zeros(mdl.M, mdl.N);
+    # for j = 1 : mdl.N
+    #     prob_mjM[:, j] = decision_prob(mdl, endow_jV[j],  optValue_mV);
+    # end
+
+    @assert all(prob_mjM .> 0.0001)
+    return prob_mjM
 end
 
 
 ## Decision probabilties for one household
 # Inputs are endowments and option characteristics
 # Must be nonlinear. Otherwise some parameters do not affect decision probs (intercepts)
-function decision_prob(mdl :: Model, endow_kV :: Vector{Float64}, optValue_kmM :: Matrix{Float64})
-    # Utility of alternatives
-    utilV = zeros(mdl.M);
-    for m = 1 : mdl.M
-        # Ensures positive utility
-        utilV[m] = exp(sum(endow_kV .* optValue_kmM[:, m]));
-    end
-    probV = utilV ./ sum(utilV);
-    return probV
-end
+# function decision_prob(mdl :: Model, endow :: Float64, optValue_mV :: Vector{Float64})
+#     # Utility of alternatives
+#     utilV = zeros(mdl.M);
+#     for m = 1 : mdl.M
+#         # Ensures positive utility
+#         utilV[m] = sum((endow_kV .* optValue_kmM[:, m]) .^ 0.5);
+#     end
+#     @assert all(utilV .> 0.0)
+#     @assert all(utilV .< 1e5)
+#     probV = utilV ./ sum(utilV);
+#     @assert all(probV .> 0.0)
+#     @assert all(probV .< 1.0)
+#     return probV
+# end
 
 
 # This changes GLOBAL_RNG
@@ -104,58 +122,52 @@ end
 
 Compute model statistics
 """
-function compute_stats(mdl :: Model,  choice_sjM :: Matrix{T1}, 
-    endow_kjM :: Matrix{Float64}) where T1 <: Integer
+function compute_stats(mdl :: Model,  choice_sjM :: Matrix{T1})  where T1 <: Integer
 
     choiceCl_mV, Nc = choice_classes(mdl);
-    endowCl_kjM, Nendow = endowment_classes(mdl, endow_kjM);
+    endowCl_jV, Nendow = endowment_classes(mdl);
 
-    frac_cekM = zeros(Nc, Nendow, mdl.K);
-    for i_k = 1 : mdl.K
-        # Count by [choice class, endowment class]
-        cnt_ceM = zeros(Int64,  Nc, Nendow);
-        for j = 1 : mdl.N
-            # Endowment class for this agent
-            iEndow = endowCl_kjM[i_k, j];
-            # Choice class by simulated instance of hh j
-            choiceClV = choiceCl_mV[choice_sjM[:, j]];
-            for ic = 1 : Nc
-                # Count how many simulated agents choose this choice class
-                cnt_ceM[ic, iEndow] += round(Int64, sum(choiceClV .== ic));
-            end
+    # Count by [choice class, endowment class]
+    cnt_ceM = zeros(Int64,  Nc, Nendow);
+    for j = 1 : mdl.N
+        # Endowment class for this agent
+        iEndow = endowCl_jV[j];
+        # Choice class by simulated instance of hh j
+        choiceClV = choiceCl_mV[choice_sjM[:, j]];
+        for ic = 1 : Nc
+            # Count how many simulated agents choose this choice class
+            cnt_ceM[ic, iEndow] += round(Int64, sum(choiceClV .== ic));
         end
-        frac_cekM[:,:,i_k] = cnt_ceM ./ sum(cnt_ceM);
     end
-    mStats = ModelStats(frac_cekM);
+    frac_ceM = cnt_ceM ./ sum(cnt_ceM);
+    mStats = ModelStats(frac_ceM);
     return mStats
 end
 
 
 function choice_classes(mdl :: Model)
-    Nendow = min(6, mdl.M);
+    Nendow = min(mdl.nChoiceCl, mdl.M - 2);
     pctUbV = collect(range(1.0 ./ Nendow, 1.0, length = Nendow));
     choiceCl_kV = discretize_given_percentiles(collect(1.0 : mdl.M), pctUbV, false);
     return choiceCl_kV, Nendow
 end
 
 
-function endowment_classes(mdl :: Model, endow_kjM :: Matrix{Float64});
-    Nendow = min(5, mdl.N);
+function endowment_classes(mdl :: Model);
+    Nendow = min(mdl.nEndowCl, mdl.N - 2);
+    endow_jV = make_endowments(mdl);
     pctUbV = collect(range(1.0 ./ Nendow, 1.0, length = Nendow));
-    endowCl_kjM = zeros(Int, mdl.K, mdl.N);
-    for i_k = 1 : mdl.K
-        endowCl_kjM[i_k, :] = discretize_given_percentiles(endow_kjM[i_k,:], pctUbV, false);
-    end
+    endowCl_jV = discretize_given_percentiles(endow_jV, pctUbV, false);
 
-    return endowCl_kjM, Nendow
+    return endowCl_jV, Nendow
 end
 
 
 ## ------------  Deviation
 
 function deviation(mdl :: Model,  tgStats :: ModelStats,  mStats :: ModelStats)
-    dev_cekM = mStats.frac_cekM .- tgStats.frac_cekM;
-    dev = sum(abs.(dev_cekM));
+    dev_ceM = mStats.frac_ceM .- tgStats.frac_ceM;
+    dev = sum(abs.(dev_ceM));
     mdl.currentIter += 1;
 
     if mdl.currentIter < 100

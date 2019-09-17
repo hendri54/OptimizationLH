@@ -15,7 +15,7 @@ using Test
 
     # Handling guesses
     guessV = OptimizationLH.mp_to_guess(mdl, mp);
-    @test length(guessV) == 4 * mdl.K
+    @test length(guessV) == OptimizationLH.n_params(mdl)
     @test isa(guessV, Vector{Float64})
     mp2 = OptimizationLH.guess_to_mp(mdl, guessV);
     @test mp2.alphaV == mp.alphaV

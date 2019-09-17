@@ -3,7 +3,8 @@ module OptimizationLH
 using Distributions, Formatting, Parameters, Random
 using NLopt
 
-export Model, calibrate
+export Model, calibrate, make_endowments, decision_probabilities
+export make_random_parameters
 
 include("discretize.jl")
 include("types.jl")
@@ -60,8 +61,8 @@ function calibrate(mdl :: Model, algo :: Symbol)
     
     optS = Opt(algo,  nParams);
     optS.min_objective = dev_fct;
-    optS.lower_bounds = -1.0;
-    optS.upper_bounds = 1.0;
+    optS.lower_bounds = 1.0;
+    optS.upper_bounds = 2.0;
     optS.stopval = 0.001;
     optS.stopval = 0.001;
     optS.ftol_rel = 0.001;
